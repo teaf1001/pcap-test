@@ -1,7 +1,6 @@
 #include <pcap.h>
 #include <stdbool.h>
 #include <stdio.h>
-#include <stdlib.h>
 
 #define 	ETHERTYPE_IP            0x0800
 #define 	ETHER_ADDR_LEN   		6
@@ -14,7 +13,6 @@ struct libnet_ethernet_hdr
     u_int8_t  ether_shost[ETHER_ADDR_LEN];/* source ethernet address */
     u_int16_t ether_type;                 /* protocol */
 };
-
 
 struct libnet_ipv4_hdr
 {
@@ -110,6 +108,10 @@ struct libnet_tcp_hdr
     u_int16_t th_urp;         /* urgent pointer */
 };
 
+struct Data {
+	char data[9];
+};
+
 void usage() {
 	printf("syntax: pcap-test <interface>\n");
 	printf("sample: pcap-test wlan0\n");
@@ -133,14 +135,14 @@ bool parse(Param* param, int argc, char* argv[]) {
 }
 
 void print_mac(struct libnet_ethernet_hdr* eth){
-	printf("MAC Dst Address = ");
+	printf("Dst MAC Address : ");
 			
 	for (int i=0 ; i<ETHER_ADDR_LEN-1; i++){
 		printf("%02x:",eth->ether_dhost[i]);
 	}
 		printf("%02x\n",eth->ether_dhost[5]);
 
-	printf("MAC Src Address = ");
+	printf("Src MAC Address : ");
 	for (int i=0 ; i<ETHER_ADDR_LEN-1; i++){
 		printf("%02x:",eth->ether_shost[i]);
 	}
@@ -150,28 +152,39 @@ void print_mac(struct libnet_ethernet_hdr* eth){
 }
 
 void print_ip(struct libnet_ipv4_hdr* ipv4){
+	uint32_t sip = ntohl(ipv4->ip_src.s_addr);
+	uint8_t a, b, c, d;
+    a = (sip & 0xFF000000) >> 24;
+    b = (sip & 0x00FF0000) >> 16;
+    c = (sip & 0x0000FF00) >> 8;
+    d = (sip & 0x000000FF) >> 0;
+    printf("Src Ip : %u.%u.%u.%u\n", a, b, c, d);
 
-	printf("ip src: %s\n", inet_ntoa(ipv4->ip_src));
-	printf("ip dst: %s\n", inet_ntoa(ipv4->ip_dst));
+    uint32_t dip = ntohl(ipv4->ip_dst.s_addr);
+    a = (dip & 0xFF000000) >> 24;
+    b = (dip & 0x00FF0000) >> 16;
+    c = (dip & 0x0000FF00) >> 8;
+    d = (dip & 0x000000FF) >> 0;
+    printf("Dst Ip : %u.%u.%u.%u\n", a, b, c, d);
 
 	return;
 }
 
 void print_tcp(struct libnet_tcp_hdr* tcp){
-	printf("TCP Src Port: %d\n", ntohs(tcp->th_sport));
-	printf("TCP Dst Port: %d\n", ntohs(tcp->th_dport));
+	printf("TCP Src Port : %d\n", ntohs(tcp->th_sport));
+	printf("TCP Dst Port : %d\n", ntohs(tcp->th_dport));
+
 	return;
 }
 
-void print_data(struct libnet_tcp_hdr* tcp, uint32_t length){
+void print_data(struct Data* payload, uint8_t length){
 	if (length > 8){
 		length = 8;
 	}
-	u_char* payload = (u_char *)tcp + tcp->th_off * 4;
-	printf("DATA(8bytes): ");
-	for(int i=0 ; i<length ; i++){
-		printf("%02x ",payload[i]);
-	}
+
+	printf("Data(Max 8bytes) : ");
+			for(int i=0; i<length; i++)
+			printf("%02x ", (payload->data[i] & 0xff));
 	return;
 }
 
@@ -194,32 +207,34 @@ int main(int argc, char* argv[]) {
 	while (true) {
 		struct pcap_pkthdr* header;
 		const u_char* packet;
-		u_char * payload;
 		int res = pcap_next_ex(pcap, &header, &packet);
 
+		if (res == 0) {
+			printf("res = 0\n");
+			continue;
+		}
+		if (res == PCAP_ERROR || res == PCAP_ERROR_BREAK) {
+			printf("pcap_next_ex return %d(%s)\n", res, pcap_geterr(pcap));
+		break;
+		}
+		
+		struct Data* payload = (struct Data*)(packet+sizeof(*eth)+sizeof(*ipv4)+sizeof(*tcp));
 		eth = (struct libnet_ethernet_hdr*) packet;
 		ipv4 = (struct libnet_ipv4_hdr*) (packet + sizeof(struct libnet_ethernet_hdr));
 		tcp = (struct libnet_tcp_hdr*) (packet+ sizeof(struct libnet_ethernet_hdr) + sizeof(struct libnet_ipv4_hdr));
-		//data_packet = packet+sizeof(struct libnet_ethernet_hdr) + sizeof(struct libnet_ipv4_hdr) + sizeof(struct libnet_tcp_hdr);
 		
-		if(ipv4->ip_p == IPPROTO_TCP){	// If tcp protocol, continue it.
-			printf("It is TCP packet\n");
-			print_mac(eth);
-			print_ip(ipv4);
-			print_tcp(tcp);
-			uint32_t length = ipv4->ip_len - sizeof(ipv4) - sizeof(tcp);
-			print_data(tcp, length);
-			printf("\n--------------------------\n");
-		}
-
-		if (res == 0) continue;
-		if (res == PCAP_ERROR || res == PCAP_ERROR_BREAK) {
-			printf("pcap_next_ex return %d(%s)\n", res, pcap_geterr(pcap));
-			break;
-		}
-
+		if((ntohs(eth->ether_type) == 0x0800) && (ipv4->ip_p == IPPROTO_TCP)){
+				printf("%u bytes captured\n", header->caplen);
+				printf("It is TCP packet\n");
+				print_mac(eth);
+				print_ip(ipv4);
+				print_tcp(tcp);
+				uint8_t length = header->caplen - sizeof(*eth) - sizeof(*ipv4) - sizeof(*tcp);
+				//printf("length of payload %d\n", );
+				print_data(payload, length);
+				printf("\n--------------------------\n");
+			}
 	}
-
 	pcap_close(pcap);
 }
 
